@@ -1,0 +1,27 @@
+provider:
+  name: openfaas
+  gateway: http://127.0.0.1:8080
+
+functions:
+  image-resize:
+    lang: python3-http
+    handler: ./functions/image_resize
+    image: image-resize:local
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 512Mi
+    environment:
+      read_timeout: "30s"
+      write_timeout: "30s"
+  json-transform:
+    lang: python3-http
+    handler: ./functions/json_transform
+    image: json-transform:local
+    limits:
+      memory: 512Mi
+    requests:
+      memory: 512Mi
+    environment:
+      read_timeout: "30s"
+      write_timeout: "30s"

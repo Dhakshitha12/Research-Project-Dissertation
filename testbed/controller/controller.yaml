@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prewarm-controller-config
+  namespace: openfaas-fn
+data:
+  FUNCTION_NAME: image-resize
+  DEPLOYMENT_NAME: function-image-resize
+  FUNCTION_CONTAINER_NAME: function
+  RUNTIME: python3.12
+  WORKLOAD: image_resize
+  ALGORITHM: ppo
+  MEMORY_GRID_MB: "128,256,512,1024"
+  PROMETHEUS_URL: http://prometheus.openfaas:9090
+  PROMQL_JSON: >-
+    {"rate10":"sum(rate(gateway_function_invocation_total{function_name=\"{function}\"}[10s]))",
+    "rate60":"sum(rate(gateway_function_invocation_total{function_name=\"{function}\"}[60s]))",
+    "last_arrival":"sum(rate(gateway_function_invocation_total{function_name=\"{function}\"}[15s]))",
+    "variance30":"var_over_time(sum(rate(gateway_function_invocation_total{function_name=\"{function}\"}[15s]))[30s:1s])"}
+  MODEL_PATH: /models/policy.zip
+  INTERVAL_SECONDS: "1"
+  K8S_NAMESPACE: openfaas-fn
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prewarm-controller-image-resize
+  namespace: openfaas-fn
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prewarm-controller-image-resize
+  namespace: openfaas-fn
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["function-image-resize"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prewarm-controller-image-resize
+  namespace: openfaas-fn
+subjects:
+  - kind: ServiceAccount
+    name: prewarm-controller-image-resize
+    namespace: openfaas-fn
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prewarm-controller-image-resize
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prewarm-controller-image-resize
+  namespace: openfaas-fn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prewarm-controller-image-resize
+  template:
+    metadata:
+      labels:
+        app: prewarm-controller-image-resize
+    spec:
+      serviceAccountName: prewarm-controller-image-resize
+      initContainers:
+        - name: wait-for-policy
+          image: busybox:1.36
+          command: ["sh", "-c", "until test -s /models/policy.zip; do sleep 2; done"]
+          volumeMounts:
+            - name: policy-model
+              mountPath: /models
+      containers:
+        - name: controller
+          image: prewarm-policy-controller:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: health
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: prewarm-controller-config
+          volumeMounts:
+            - name: policy-model
+              mountPath: /models
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 10
+      volumes:
+        - name: policy-model
+          persistentVolumeClaim:
+            claimName: prewarm-policy-model
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prewarm-policy-model
+  namespace: openfaas-fn
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
